@@ -1,0 +1,3 @@
+module iRaceHUD
+
+go 1.21.5
