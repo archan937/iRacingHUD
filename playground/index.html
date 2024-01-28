@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>iRacing HUD - Playground</title>
+    <script src="../huds/js/react.development.js"></script>
+    <script src="../huds/js/react-dom.development.js"></script>
+    <script src="../huds/js/immer.js"></script>
+    <script src="../huds/js/moment.min.js"></script>
+    <script src="../huds/js/game-state.js"></script>
+    <script src="../huds/js/babel.js"></script>
+    <script src="./js/fake-data.js"></script>
+    <script src="./js/hud.js"></script>
+    <script src="./js/jszip.min.js"></script>
+    <script src="./js/uuid.js"></script>
+    <script>
+      var windowRequire = window.require;
+    </script>
+    <script src="./js/monaco-editor/min/vs/loader.js"></script>
+    <style>
+      * {
+        user-select: none;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: gray;
+      }
+
+      #editor {
+        width: 700px;
+        height: 100vh;
+      }
+
+      #app {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      @font-face {
+        font-family: "Digital";
+        src: url("../huds/fonts/Digital-7 MonoItalic.ttf") format("truetype");
+      }
+
+      @font-face {
+        font-family: "iRacing";
+        src: url("../huds/fonts/Square 721 Extended Bold.otf")
+          format("opentype");
+      }
+
+      .unfold,
+      .fold {
+        padding-right: 45px !important;
+      }
+
+      .unfold:after {
+        content: "";
+        top: 50%;
+        right: 20px;
+        margin-top: -2px;
+        width: 0;
+        height: 0;
+        position: absolute;
+        border-left: 6px solid transparent;
+        border-right: 6px solid transparent;
+        border-top: 6px solid black;
+      }
+
+      .fold:after {
+        content: "";
+        top: 50%;
+        right: 20px;
+        margin-top: -2px;
+        width: 0;
+        height: 0;
+        position: absolute;
+        border-left: 6px solid transparent;
+        border-right: 6px solid transparent;
+        border-bottom: 6px solid black;
+      }
+
+      .clickable:hover {
+        color: white;
+        background-color: #145da0;
+      }
+    </style>
+  </head>
+  <body>
+    <div style="display: flex">
+      <div style="background: rgb(30, 30, 30)">
+        <div id="editor"></div>
+      </div>
+      <div id="app"></div>
+    </div>
+    <script>
+      const amdRequire = window.require;
+      window.require = windowRequire;
+      amdRequire.config({
+        paths: { vs: "./js/monaco-editor/min/vs" },
+      });
+      amdRequire(["vs/editor/editor.main"], function () {
+        window.editor = monaco.editor.create(
+          document.getElementById("editor"),
+          {
+            language: "jsx",
+            options: { minimap: { enabled: false }, tabSize: 2 },
+            theme: "vs-dark",
+            use: ["jsx-loader"],
+          }
+        );
+        window.editor.getModel().onDidChangeContent((event) => {
+          window.editor.onChange &&
+            window.editor.onChange(window.editor.getValue());
+        });
+      });
+    </script>
+    <script type="text/babel">
+      const TOP = 3.25;
+      const PERCENTAGE = 75;
+      const WIDTH = 1945;
+      const HEIGHT = 958;
+      const MARGIN = 37;
+
+      const { createElement, useEffect, useRef, useState } = React;
+      const { createRoot } = ReactDOM;
+
+      const get = (key) => {
+        let value = localStorage.getItem(key);
+        try {
+          value = JSON.parse(value);
+        } catch (error) {}
+        return value;
+      };
+
+      const set = (key, val) => {
+        const value =
+          typeof val === "object" ? JSON.stringify(val, null, 2) : val;
+        localStorage.setItem(key, value);
+        return val;
+      };
+
+      const toPlainValue = (value) => JSON.parse(JSON.stringify(value));
+
+      const resolveStyling = (strings, values) => {
+        let css = "";
+        strings.map((string, index) => {
+          css += `${string}${values[index] || ""}`;
+        });
+
+        const styling = {};
+        css
+          .trim()
+          .split(";")
+          .map((style) => {
+            const [_, key, value] =
+              style.trim().match(/([^:]+):\s(.+)/ms) || [];
+            if (key) {
+              const property = key
+                .trim()
+                .toLowerCase()
+                .replaceAll(/-(\w)/g, (_, char) => char.toUpperCase());
+              styling[property] = value.trim();
+            }
+          });
+
+        return styling;
+      };
+
+      const styledComponent =
+        (Component) =>
+        (strings, ...values) =>
+        ({ children, style, ...props }) =>
+          (
+            <Component
+              style={Object.assign({}, resolveStyling(strings, values), style)}
+              {...props}
+            >
+              {children}
+            </Component>
+          );
+
+      const styled = new Proxy((component) => styledComponent(component), {
+        get: (_, name) =>
+          styledComponent(({ children, ...props }) =>
+            createElement(name, props, children)
+          ),
+      });
+
+      function useImmerState(initialValue) {
+        const [getter, setter] = useState(initialValue || {});
+        return [getter, (fn) => setter(immer.produce(fn))];
+      }
+
+      function Moveable({ usedRef: ref, onClick, onMove, style, children }) {
+        const isDragging = useRef(false);
+
+        const [top, setTop] = useState(0);
+        const [left, setLeft] = useState(0);
+        const [width, setWidth] = useState(0);
+        const [height, setHeight] = useState(0);
+
+        const onPointerDown = (event) => {
+          event.stopPropagation();
+          isDragging.current = true;
+          onClick && onClick();
+        };
+
+        const onPointerUp = () => {
+          isDragging.current = false;
+        };
+
+        const onPointerMove = (event) => {
+          if (onMove && isDragging.current) {
+            const position = onMove(event.movementX, event.movementY);
+            setTop(position.top);
+            setLeft(position.left);
+          }
+        };
+
+        useEffect(() => {
+          if (ref) {
+            const toJSON = (object) =>
+              JSON.stringify(Object.entries(object).sort());
+
+            const current = ref.current;
+            ref.current = {
+              update: (bounds) => {
+                if (
+                  !isDragging.current &&
+                  toJSON(bounds) !== toJSON({ top, left, width, height })
+                ) {
+                  setTop(bounds.top);
+                  setLeft(bounds.left);
+                  setWidth(bounds.width);
+                  setHeight(bounds.height);
+                }
+              },
+            };
+            current && current();
+          }
+
+          window.addEventListener("pointerup", onPointerUp);
+          return () => {
+            window.removeEventListener("pointerup", onPointerUp);
+          };
+        }, []);
+
+        return (
+          <div
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            style={{
+              top: `${top}px`,
+              left: `${left}px`,
+              width: `${width}px`,
+              height: `${height}px`,
+              cursor: isDragging ? "grab" : "default",
+              position: "absolute",
+              overflow: "hidden",
+              ...style,
+            }}
+          >
+            {children}
+          </div>
+        );
+      }
+
+      function HUD({ reload, themeId, hud, canvas, data }) {
+        const BOUNDS = /\/\/\s*BOUNDS: ([^\n]+)\n/ms;
+
+        const [state, setState] = useImmerState(
+          (function () {
+            return (
+              get(themeId)?.huds?.find(({ id }) => id === hud.id) ||
+              toPlainValue(hud)
+            );
+          })()
+        );
+
+        const [Component, setComponent] = useState();
+
+        const edit = (jsx) => {
+          editor.onChange = setJsx;
+          editor.setValue(jsx);
+        };
+
+        const setJsx = (value) => {
+          const jsx = value.replaceAll(/\{\s*state\s*\}/gms, "{}");
+          if (jsx !== state.jsx) {
+            setState((draft) => ({ ...draft, jsx }));
+            return true;
+          }
+          return false;
+        };
+
+        const setBounds = (fn) => {
+          let bounds = { top: 250, left: 150, width: 400, height: 200 };
+
+          state.jsx.replace(BOUNDS, (line) => {
+            line.replace(/\d+,\d+/, (position) => {
+              const [top, left] = position.split(",").map((i) => parseInt(i));
+              bounds = { ...bounds, top, left };
+            });
+
+            line.replace(/\d+x\d+/, (dimensions) => {
+              const [width, height] = dimensions
+                .split("x")
+                .map((i) => parseInt(i));
+              bounds = { ...bounds, width, height };
+            });
+          });
+
+          const { top, left, width, height } = {
+            ...bounds,
+            ...(fn ? fn(bounds) : {}),
+          };
+
+          const jsx = state.jsx.replace(
+            BOUNDS,
+            (_, specs) => `// BOUNDS: ${top},${left} ${width}x${height}\n`
+          );
+
+          moveable.current.update({ top, left, width, height });
+
+          if (setJsx(jsx)) {
+            editor.setValue(jsx);
+          }
+        };
+
+        const onMove = (deltaX, deltaY) => {
+          let bounds;
+
+          setBounds(({ top, left, width, height }) => {
+            bounds = {
+              top: Math.min(
+                canvas.height - height - MARGIN,
+                Math.max(0, top + deltaY)
+              ),
+              left: Math.min(canvas.width - width, Math.max(0, left + deltaX)),
+            };
+            return bounds;
+          });
+
+          return bounds;
+        };
+
+        const onResize = (deltaX, deltaY) => {
+          let bounds;
+
+          setBounds(({ top, left, width, height }) => {
+            bounds = {
+              width: Math.min(canvas.width - left, width + deltaX),
+              height: Math.min(canvas.height - top - MARGIN, height + deltaY),
+            };
+            return bounds;
+          });
+
+          return {
+            top: bounds.top + bounds.height - 30,
+            left: bounds.left + bounds.width - 30,
+          };
+        };
+
+        useEffect(() => {
+          edit(state.jsx);
+        }, []);
+
+        useEffect(() => {
+          if (state.jsx) {
+            try {
+              const fn = Babel.transform(
+                `function Component() { try { ${state.jsx} } catch (error) { console.log(error); } }`,
+                {
+                  presets: ["react", "es2016"],
+                }
+              ).code;
+
+              const component = () => {
+                return new Function(
+                  "styled",
+                  "state",
+                  "time",
+                  "eval",
+                  "window",
+                  "document",
+                  "fetch",
+                  "XMLHTTPRequest",
+                  `return ${fn}`
+                )(styled, data, 17248573);
+              };
+
+              component()();
+              setComponent(component);
+              setBounds();
+            } catch (error) {
+              // console.log(error);
+            }
+          }
+        }, [state.jsx]);
+
+        useEffect(() => {
+          const theme = get(themeId);
+          theme.huds = theme?.huds?.map((hud) => {
+            if (hud.id === state.id) {
+              return toPlainValue(state);
+            } else {
+              return hud;
+            }
+          });
+          set(themeId, theme);
+        }, [state]);
+
+        const remove = () => {
+          if (confirm("Are you sure you want to remove the headsup display?")) {
+            const theme = get(themeId);
+            theme.huds = theme?.huds?.filter((hud) => hud.id !== state.id);
+            set(themeId, theme);
+            reload();
+            editor.setValue("");
+          }
+        };
+
+        const moveable = useRef(setBounds);
+
+        return (
+          <Moveable
+            usedRef={moveable}
+            onClick={() => edit(state.jsx)}
+            onMove={onMove}
+          >
+            {Component ? <Component /> : null}
+            <div
+              onClick={remove}
+              style={{
+                top: "0",
+                right: "0",
+                padding: "10px",
+                color: "white",
+                fontFamily: "iRacing",
+                position: "absolute",
+                zIndex: 999,
+              }}
+            >
+              X
+            </div>
+            <Moveable
+              onClick={() => edit(state.jsx)}
+              onMove={onResize}
+              style={{
+                top: "auto",
+                left: "auto",
+                right: "0",
+                bottom: "0",
+                width: "30px",
+                height: "30px",
+                cursor: "nwse-resize",
+                position: "absolute",
+                zIndex: 999,
+              }}
+            />
+          </Moveable>
+        );
+      }
+
+      function App() {
+        const [themes, setThemes] = useState([{ name: "New theme" }]);
+
+        const [currentTheme, setCurrentTheme] = useImmerState({});
+        const [fakeData, setFakeData] = useImmerState({});
+
+        const [open, setOpen] = useState();
+        const [width, setWidth] = useState(0);
+        const [height, setHeight] = useState(0);
+
+        const themeId = (theme) => {
+          if (theme?.id) {
+            return `irHUD:theme-${theme.id}`;
+          }
+        };
+
+        const themeName = (theme) => {
+          if (theme?.name) {
+            return `${theme.github ? "github" : "playground"}:/> ${theme.name}`;
+          }
+        };
+
+        const getCurrentTheme = () => {
+          const theme =
+            get(get("irHUD:currentTheme")) || themes[themes.length - 1];
+
+          if (theme) {
+            try {
+              setCurrentTheme(() => theme);
+            } catch (error) {
+              // console.log(error);
+            }
+          }
+        };
+
+        const loadTheme = (theme) => {
+          if (!theme.id && theme.huds) {
+            theme.id = uuid();
+            set(themeId(theme), theme);
+          }
+
+          theme?.huds?.forEach((hud) => {
+            if (!hud.id) {
+              hud.id = uuid();
+            }
+          });
+
+          setThemes((draft) => {
+            let found = false;
+            draft.forEach((t, i) => {
+              if (themeName(t) === themeName(theme)) {
+                found = true;
+                draft[i] = theme;
+              }
+            });
+            if (!found) {
+              draft = [...draft, theme];
+            }
+            return draft;
+          });
+          setCurrentTheme(() => theme);
+
+          editor.setValue("");
+        };
+
+        const addHUD = () => {
+          if (currentTheme.id) {
+            setCurrentTheme(() => {
+              const theme = get(themeId(currentTheme));
+              return set(themeId(currentTheme), {
+                ...theme,
+                huds: [
+                  ...theme.huds,
+                  {
+                    id: uuid(),
+                    jsx: JSX.replace(
+                      /\/\/\s*NAME:/,
+                      `// NAME: Display ${theme.huds.length + 1}`
+                    ),
+                  },
+                ],
+              });
+            });
+          } else {
+            const name = prompt(
+              "Please give the name for your iRacingHUD theme:"
+            );
+
+            if (name) {
+              setCurrentTheme(() => {
+                const theme = {
+                  id: uuid(),
+                  name,
+                  huds: [
+                    {
+                      id: uuid(),
+                      jsx: JSX.replace(/\/\/\s*NAME:/, `// NAME: Display 1`),
+                    },
+                  ],
+                };
+
+                set(themeId(theme), theme);
+                setThemes((draft) => {
+                  return [...draft, theme];
+                });
+
+                return theme;
+              });
+            }
+          }
+        };
+
+        const downloadZIP = () => {
+          if (currentTheme.huds?.length) {
+            const name = prompt(
+              "Please give the name for your iRacingHUD theme:",
+              currentTheme.name
+            );
+            if (name) {
+              const zip = new JSZip();
+              currentTheme.huds.forEach((hud, i) => {
+                const filename =
+                  hud.jsx.match(/\/\/ NAME:\s*([^\n]+)\n/ms) || [];
+                zip.file(
+                  `${name}/${filename[1] || `Display ${i}`}.jsx`,
+                  hud.jsx
+                );
+              });
+              zip.generateAsync({ type: "base64" }).then((content) => {
+                const a = document.createElement("a");
+                a.href = "data:application/zip;base64," + content;
+                a.download = `iRacingHUD-${name}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+              });
+            }
+          }
+        };
+
+        useEffect(() => {
+          setTimeout(getCurrentTheme, 400);
+
+          const resize = () => {
+            setWidth(
+              Math.round(
+                window.screen.height * (PERCENTAGE / 100) * (WIDTH / HEIGHT)
+              )
+            );
+            setHeight(Math.round(window.screen.height * (PERCENTAGE / 100)));
+          };
+          resize();
+
+          const stopFakeData = updateFakeData(setFakeData);
+          window.addEventListener("resize", resize);
+          return () => {
+            window.removeEventListener("resize", resize);
+            stopFakeData();
+          };
+        }, []);
+
+        useEffect(() => {
+          const onClick = () => {
+            open && setOpen(false);
+          };
+          window.addEventListener("click", onClick);
+          return () => {
+            window.removeEventListener("click", onClick);
+          };
+        }, [open]);
+
+        useEffect(() => {
+          const id = themeId(currentTheme);
+          if (id) {
+            set("irHUD:currentTheme", id);
+          }
+        }, [currentTheme]);
+
+        const Controls = styled.div`
+          top: ${TOP}%;
+          margin: auto;
+          padding-top: 10px;
+          display: flex;
+          justify-content: space-between;
+          position: absolute;
+          z-index: 999999;
+        `;
+
+        const Select = styled.div`
+          margin: 0 10px;
+          padding: 10px 30px;
+          color: #222;
+          font-family: iRacing;
+          font-size: 19px;
+          position: relative;
+          background: white;
+          border: 2px solid #222;
+          border-radius: 16px;
+        `;
+
+        const Options = styled.div`
+          margin-top: 2px;
+          margin-left: 10px;
+          padding: 5px 0;
+          color: #222;
+          font-family: iRacing;
+          font-size: 18px;
+          text-align: left;
+          background: white;
+          border: 2px solid #222;
+          border-radius: 16px;
+        `;
+
+        const Button = styled.button`
+          margin: 0 10px;
+          padding: 10px 20px;
+          color: #222;
+          font-family: iRacing;
+          font-size: 19px;
+          background: white;
+          border-radius: 16px;
+        `;
+
+        const Game = styled.div`
+          margin-top: 40px;
+          position: relative;
+          background: url(./iRacing.png) no-repeat 50% 50%;
+          background-size: contain;
+        `;
+
+        const Canvas = styled.div`
+          width: 100%;
+          height: calc(100% - ${MARGIN}px);
+          margin-top: ${MARGIN}px;
+          position: relative;
+        `;
+
+        return (
+          <>
+            <Controls style={{ width: `${width + 20}px` }}>
+              <div>
+                <Select
+                  className={themes.length ? (open ? "fold" : "unfold") : ""}
+                  {...(themes.length
+                    ? {
+                        onClick: (event) => {
+                          event.stopPropagation();
+                          setOpen(!open);
+                        },
+                      }
+                    : {})}
+                >
+                  {themeName(currentTheme)}
+                </Select>
+                {themes.length ? (
+                  <Options style={{ display: open ? "block" : "none" }}>
+                    {themes.map((theme) => (
+                      <div
+                        key={themeName(theme)}
+                        className={
+                          themeName(currentTheme) !== themeName(theme)
+                            ? "clickable"
+                            : ""
+                        }
+                        style={{ padding: "5px 30px" }}
+                        {...(themeName(currentTheme) !== themeName(theme)
+                          ? { onClick: () => loadTheme(theme) }
+                          : {})}
+                      >
+                        {themeName(theme)}{" "}
+                        {themeName(currentTheme) !== themeName(theme)
+                          ? ""
+                          : "*"}
+                      </div>
+                    ))}
+                  </Options>
+                ) : null}
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <Button onClick={addHUD}>Add headsup display</Button>
+                <Button onClick={downloadZIP}>Download ZIP file</Button>
+              </div>
+            </Controls>
+            <Game style={{ width: `${width}px`, height: `${height}px` }}>
+              <Canvas>
+                {currentTheme?.huds?.map((hud) => (
+                  <HUD
+                    key={`hud${hud.id}`}
+                    themeId={themeId(currentTheme)}
+                    reload={getCurrentTheme}
+                    hud={hud}
+                    canvas={{ width, height }}
+                    data={fakeData}
+                  />
+                ))}
+              </Canvas>
+            </Game>
+          </>
+        );
+      }
+
+      const container = document.getElementById("app");
+      const root = createRoot(container);
+      root.render(<App />);
+    </script>
+  </body>
+</html>
