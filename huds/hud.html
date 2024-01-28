@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>// NAME</title>
+    <script src="./js/react.development.js"></script>
+    <script src="./js/react-dom.development.js"></script>
+    <script src="./js/styled-components.min.js"></script>
+    <script src="./js/immer.min.js"></script>
+    <script src="./js/moment.js"></script>
+    <script src="./js/game-state.js"></script>
+    <script src="./js/babel.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="text/babel">
+      function App() {
+        const epoch = React.useRef(0);
+        const sector = React.useRef(0);
+
+        const [state, setState] = useImmerState();
+        const [time, setTime] = React.useState();
+        const [sectorTimes, setSectorTimes] = useImmerState({});
+        const [sectorColors, setSectorColors] = useImmerState({});
+
+        const sectorColor = (times) => {
+          const lastTime = times[times.length - 1];
+          return lastTime === Math.min(...times) ? "purple" : "yellow";
+        };
+
+        const sectorDelta = (times) => {
+          if (times.length > 1) {
+            const lastTime = times[times.length - 1];
+            const [fastestTime, secondFastestTime] = [...times].sort();
+            const fastestLap = lastTime === fastestTime;
+
+            return (
+              (fastestLap ? "" : "+") +
+              (fastestLap
+                ? lastTime - secondFastestTime
+                : lastTime - fastestTime
+              ).toFixed(3)
+            );
+          }
+          return times[0].toFixed(3);
+        };
+
+        const updateTime = () => {
+          setTime(
+            moment
+              .utc(new Date().getTime() - epoch.current * 1000)
+              .format("HH:mm:ss.SSS")
+          );
+        };
+
+        React.useEffect(() => {
+          syncGameState(setState, (state) => {
+            if (state.epoch) {
+              if (!epoch.current) {
+                setInterval(
+                  updateTime,
+                  Math.floor(Math.random() * (100 - 75 + 1) + 75)
+                );
+              }
+              epoch.current = state.epoch;
+            }
+          });
+        }, []);
+
+        React.useEffect(() => {
+          if (state.lastSector === 1 || sectorColors[state.lastSector - 1]) {
+            let sectorTimes;
+
+            setSectorTimes((draft) => {
+              const time = parseFloat((state.lastSectorTime / 1000).toFixed(3));
+              const times = draft[state.lastSector] || [];
+              sectorTimes = {
+                ...draft,
+                [state.lastSector]: [...times, time],
+              };
+              return sectorTimes;
+            });
+
+            setSectorColors((draft) => {
+              const sectors = Object.keys(sectorTimes);
+              const currentLap = Math.max(
+                ...sectors.map((sector) => sectorTimes[sector].length)
+              );
+              sectors.forEach((sector) => {
+                const times = sectorTimes[sector];
+                const color = sectorColor(times);
+                const delta = sectorDelta(times);
+                const opacity = times.length === currentLap ? 1 : 0.75;
+                draft[sector] = { color, delta, opacity };
+              });
+              return draft;
+            });
+          }
+        }, [state.sector]);
+
+        // JSX
+      }
+
+      ReactDOM.render(<App />, document.getElementById("app"));
+    </script>
+  </body>
+</html>

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <script src="./umd/react.development.js"></script>
+    <script src="./umd/react-dom.development.js"></script>
+    <script src="./umd/styled-components.min.js"></script>
+    <script src="./umd/babel.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="text/babel">
+      function App() {
+        const [configuring, setConfiguring] = React.useState(false);
+
+        const configure = (bool) => {
+          setConfiguring(bool);
+          astilectron.sendMessage(bool ? "CONFIGURE" : "DONE");
+        };
+
+        const Button = styled.button`
+          margin-top: 6px;
+          padding: 6px;
+          font-family: Microsoft YaHei UI;
+          text-align: center;
+          letter-transform: uppercase;
+        `;
+
+        return (
+          <div style={{ textAlign: "center" }}>
+            <Button onClick={() => configure(!configuring)}>
+              {configuring ? "Done" : "Position windows"}
+            </Button>
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("app")).render(<App />);
+    </script>
+  </body>
+</html>

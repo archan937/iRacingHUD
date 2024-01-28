@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Time</title>
+    <script src="./umd/react.development.js"></script>
+    <script src="./umd/react-dom.development.js"></script>
+    <script src="./umd/styled-components.min.js"></script>
+    <script src="./umd/immer.min.js"></script>
+    <script src="./umd/moment.js"></script>
+    <script src="./umd/game-state.js"></script>
+    <script src="./umd/babel.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="text/babel">
+      function App() {
+        const epoch = React.useRef(0);
+        const sector = React.useRef(0);
+
+        const [state, setState] = useImmerState();
+        const [time, setTime] = React.useState();
+        const [sectorTimes, setSectorTimes] = useImmerState({});
+        const [sectorColors, setSectorColors] = useImmerState({});
+
+        const sectorColor = (times) => {
+          const lastTime = times[times.length - 1];
+          return lastTime === Math.min(...times) ? "purple" : "yellow";
+        };
+
+        const sectorDelta = (times) => {
+          if (times.length > 1) {
+            const lastTime = times[times.length - 1];
+            const [fastestTime, secondFastestTime] = [...times].sort();
+            const fastestLap = lastTime === fastestTime;
+
+            return (
+              (fastestLap ? "" : "+") +
+              (fastestLap
+                ? lastTime - secondFastestTime
+                : lastTime - fastestTime
+              ).toFixed(3)
+            );
+          }
+          return times[0].toFixed(3);
+        };
+
+        const updateTime = () => {
+          setTime(
+            moment
+              .utc(new Date().getTime() - epoch.current * 1000)
+              .format("HH:mm:ss.SSS")
+          );
+        };
+
+        React.useEffect(() => {
+          syncGameState(setState, (state) => {
+            if (state.epoch) {
+              if (!epoch.current) {
+                setInterval(
+                  updateTime,
+                  Math.floor(Math.random() * (100 - 75 + 1) + 75)
+                );
+              }
+              epoch.current = state.epoch;
+            }
+          });
+        }, []);
+
+        React.useEffect(() => {
+          if (state.lastSector === 1 || sectorColors[state.lastSector - 1]) {
+            let sectorTimes;
+
+            setSectorTimes((draft) => {
+              const time = parseFloat((state.lastSectorTime / 1000).toFixed(3));
+              const times = draft[state.lastSector] || [];
+              sectorTimes = {
+                ...draft,
+                [state.lastSector]: [...times, time],
+              };
+              return sectorTimes;
+            });
+
+            setSectorColors((draft) => {
+              const sectors = Object.keys(sectorTimes);
+              const currentLap = Math.max(
+                ...sectors.map((sector) => sectorTimes[sector].length)
+              );
+              sectors.forEach((sector) => {
+                const times = sectorTimes[sector];
+                const color = sectorColor(times);
+                const delta = sectorDelta(times);
+                const opacity = times.length === currentLap ? 1 : 0.75;
+                draft[sector] = { color, delta, opacity };
+              });
+              return draft;
+            });
+          }
+        }, [state.sector]);
+
+        const Frame = styled.div`
+          position: absolute;
+          width: 100%;
+          height: 100%;
+          opacity: 0.65;
+          background: black;
+          border-radius: 10px;
+          z-index: 1;
+        `;
+
+        const Flex = styled.div`
+          padding: 30px;
+          display: flex;
+          position: relative;
+          z-index: 1;
+        `;
+
+        const Time = styled.div`
+          color: white;
+          font-family: Microsoft YaHei UI;
+          font-size: 50px;
+          font-weight: 400;
+          line-height: 100%;
+          text-align: center;
+        `;
+
+        const Elapsed = styled(Time)`
+          font-size: 20px;
+        `;
+
+        const Sector = styled(Elapsed)`
+          maring-right: 2px;
+          padding: 5px;
+          color: black;
+          flex: 1;
+          font-size: 18px;
+          font-weight: 800;
+          background: grey;
+        `;
+
+        return (
+          <>
+            <Frame />
+            <Flex>
+              <Time>
+                {state.sector === 1 || Object.keys(sectorTimes).length
+                  ? time
+                  : "00:00:00.000"}
+              </Time>
+              <div>
+                <Elapsed>
+                  Last:{" "}
+                  {state.last !== -1
+                    ? moment.utc(state.last * 1000).format("HH:mm:ss.SSS")
+                    : ""}
+                </Elapsed>
+                <Elapsed>
+                  Best: {moment.utc(state.best * 1000).format("HH:mm:ss.SSS")}
+                </Elapsed>
+              </div>
+            </Flex>
+            <Flex style={{ marginTop: "-40px" }}>
+              {Object.keys(sectorColors)
+                .sort()
+                .map((sector) => (
+                  <Sector
+                    key={`sector${sector}`}
+                    style={{
+                      color:
+                        { purple: "white" }[sectorColors[sector].color] ||
+                        "black",
+                      background: sectorColors[sector].color || "grey",
+                      opacity: sectorColors[sector].opacity || 0.75,
+                    }}
+                  >
+                    {sectorColors[sector].delta}
+                  </Sector>
+                ))}
+            </Flex>
+          </>
+        );
+      }
+
+      ReactDOM.render(<App />, document.getElementById("app"));
+    </script>
+  </body>
+</html>
